@@ -328,3 +328,46 @@ on receive emailJob:
 - **Retry Mechanism:** transient failures (timeouts, rate limits) are retried with increasing delay instead of being lost.
 - **Dead Letter Queue (DLQ):** jobs that keep failing are parked separately so they can be inspected and re-driven, without blocking the main queue.
 - **Reliability:** every student's email is tracked, retried, and never silently dropped; the in-app notification is always saved even if email is delayed.
+
+---
+
+# Stage 6
+
+**What this asks:** Fetch notifications from `GET /notifications` and compute the **Top 10**, ranked by type priority (`Placement > Result > Event`) and then by recency. Also explain how the Top 10 is kept up to date efficiently as new notifications arrive.
+
+Each notification looks like:
+```json
+{ "ID": "...", "Type": "Placement", "Message": "Amgen Inc. hiring", "Timestamp": "2026-06-04 07:18:16" }
+```
+
+## Priority calculation
+Each `Type` is mapped to a number so it can be compared:
+
+| Type | Rank |
+|---|---|
+| Placement | 3 |
+| Result | 2 |
+| Event | 1 |
+
+A higher rank means higher priority. This single number turns the rule `Placement > Result > Event` into a simple comparison.
+
+## Recency consideration
+When two notifications have the **same type**, the **newer** one wins. We compare their `Timestamp` values (converted to a time number) and put the later timestamp first. So priority is the primary sort key and time is the tie-breaker.
+
+## Top 10 selection
+1. Give every notification a priority rank from its `Type`.
+2. Sort all notifications: **by rank (highest first), then by timestamp (newest first)**.
+3. Take the first 10 with `slice(0, 10)`.
+
+This sort is `O(n log n)`, which is fast and simple for a page of notifications.
+
+## Efficient maintenance of Top N notifications
+Re-sorting the entire list every time a new notification arrives is wasteful when we only ever need the top 10. A better approach is a **min-heap of size N (here N = 10)**:
+
+- The heap always holds the current top 10, with its **weakest** item (lowest priority, then oldest) at the root.
+- When a new notification arrives:
+  - If the heap has fewer than 10 items, just add it.
+  - Otherwise, compare the new notification with the root (the weakest of the current top 10). If the new one is **stronger**, remove the root and insert the new one; if it is weaker, ignore it.
+- Each insert/replace costs `O(log N)` (about 3–4 steps for N = 10), instead of `O(n log n)` to re-sort everything.
+
+This keeps the Top 10 always ready in memory and updates it in near-constant time as notifications stream in. The comparison used by the heap is the same rule as the sort: **priority rank first, then recency.**
